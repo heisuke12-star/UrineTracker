@@ -1,4 +1,4 @@
-package com.example.urinetracker.ui.theme
+package com.heisuke12.urinetracker.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme

@@ -1,4 +1,4 @@
-package com.example.urinetracker
+package com.heisuke12.urinetracker
 
 import android.content.Context
 import android.os.Bundle
@@ -30,7 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.urinetracker.ui.theme.UrineTrackerTheme
+import com.heisuke12.urinetracker.ui.theme.UrineTrackerTheme
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -41,7 +41,8 @@ import java.util.*
 data class UrineRecord(
     val id: String = UUID.randomUUID().toString(),
     val date: Date = Date(),
-    val amount: Int
+    val amount: Int,
+    val type: String = "소변"
 )
 
 data class AppSettings(
@@ -56,7 +57,7 @@ fun saveRecords(context: Context, records: List<UrineRecord>) {
     val arr = JSONArray()
     records.forEach { r ->
         arr.put(JSONObject().apply {
-            put("id", r.id); put("date", r.date.time); put("amount", r.amount)
+            put("id", r.id); put("date", r.date.time); put("amount", r.amount); put("type", r.type)
         })
     }
     context.getSharedPreferences("urine_tracker", Context.MODE_PRIVATE)
@@ -70,7 +71,12 @@ fun loadRecords(context: Context): List<UrineRecord> {
         val arr = JSONArray(json)
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
-            UrineRecord(id = o.getString("id"), date = Date(o.getLong("date")), amount = o.getInt("amount"))
+            UrineRecord(
+                id = o.getString("id"),
+                date = Date(o.getLong("date")),
+                amount = o.getInt("amount"),
+                type = o.optString("type", "소변")
+            )
         }
     } catch (e: Exception) { emptyList() }
 }
@@ -147,8 +153,8 @@ fun UrineTrackerApp() {
     var settings by remember { mutableStateOf(loadSettings(context)) }
     var selectedTab by remember { mutableStateOf(0) }
 
-    val onAdd: (Int) -> Unit = { amount ->
-        records = records + UrineRecord(amount = amount)
+    val onAdd: (Int, String) -> Unit = { amount, type ->
+        records = records + UrineRecord(amount = amount, type = type)
         saveRecords(context, records)
     }
     val onDelete: (UrineRecord) -> Unit = { record ->
@@ -205,29 +211,32 @@ fun UrineTrackerApp() {
 fun HomeScreen(
     records: List<UrineRecord>,
     settings: AppSettings,
-    onAdd: (Int) -> Unit,
+    onAdd: (Int, String) -> Unit,
     onDelete: (UrineRecord) -> Unit
 ) {
     val todayList = records.filter { isToday(it.date) }.sortedByDescending { it.date }
-    val todayTotal = todayList.sumOf { it.amount }
+    val todayUrineTotal = todayList.filter { it.type == "소변" }.sumOf { it.amount }
+    val todayWaterTotal = todayList.filter { it.type == "물" }.sumOf { it.amount }
+
+    var selectedType by remember { mutableStateOf("소변") }
     var showCustomInput by remember { mutableStateOf(false) }
     var customAmountText by remember { mutableStateOf("") }
     var snackbarMessage by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     var recordToDelete by remember { mutableStateOf<UrineRecord?>(null) }
 
-    val warningColor: Color? = if (settings.warningEnabled && todayTotal > 0) {
+    val warningColor: Color? = if (settings.warningEnabled && todayUrineTotal > 0) {
         when {
-            todayTotal < settings.dailyMinWarning -> Color(0xFFF57C00)
-            todayTotal > settings.dailyMaxWarning -> Color(0xFFD32F2F)
+            todayUrineTotal < settings.dailyMinWarning -> Color(0xFFF57C00)
+            todayUrineTotal > settings.dailyMaxWarning -> Color(0xFFD32F2F)
             else -> null
         }
     } else null
 
-    val warningMessage: String? = if (settings.warningEnabled && todayTotal > 0) {
+    val warningMessage: String? = if (settings.warningEnabled && todayUrineTotal > 0) {
         when {
-            todayTotal < settings.dailyMinWarning -> "오늘 소변량이 너무 적어요. 수분 섭취를 늘려보세요."
-            todayTotal > settings.dailyMaxWarning -> "오늘 소변량이 매우 많아요. 의사와 상담해 보세요."
+            todayUrineTotal < settings.dailyMinWarning -> "오늘 소변량이 너무 적어요. 수분 섭취를 늘려보세요."
+            todayUrineTotal > settings.dailyMaxWarning -> "오늘 소변량이 매우 많아요. 의사와 상담해 보세요."
             else -> null
         }
     } else null
@@ -266,8 +275,8 @@ fun HomeScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("오늘", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        StatCard("총량", "$todayTotal", "ml", Modifier.weight(1f))
-                        StatCard("횟수", "${todayList.size}", "회", Modifier.weight(1f))
+                        StatCard("소변", "$todayUrineTotal", "ml", Modifier.weight(1f))
+                        StatCard("물", "$todayWaterTotal", "ml", Modifier.weight(1f))
                     }
                 }
             }
@@ -277,21 +286,49 @@ fun HomeScreen(
             // 기록 버튼
             item {
                 val amounts = listOf(200, 300, 400, 500, 600)
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("기록하기", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+
+                    // 소변 / 물 선택
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("소변" to "🚽", "물" to "💧").forEach { (type, emoji) ->
+                            if (selectedType == type) {
+                                Button(
+                                    onClick = { selectedType = type },
+                                    modifier = Modifier.weight(1f).height(48.dp),
+                                    shape = MaterialTheme.shapes.medium
+                                ) {
+                                    Text("$emoji $type", fontWeight = FontWeight.Bold)
+                                }
+                            } else {
+                                OutlinedButton(
+                                    onClick = { selectedType = type },
+                                    modifier = Modifier.weight(1f).height(48.dp),
+                                    shape = MaterialTheme.shapes.medium
+                                ) {
+                                    Text("$emoji $type")
+                                }
+                            }
+                        }
+                    }
+
+                    // 용량 선택
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         for (amount in amounts.take(3)) {
                             AmountButton(amount, {
-                                onAdd(amount)
-                                snackbarMessage = "${amount}ml 기록 완료!"
+                                onAdd(amount, selectedType)
+                                snackbarMessage = "[$selectedType] ${amount}ml 기록 완료!"
                             }, Modifier.weight(1f))
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         for (amount in amounts.drop(3)) {
                             AmountButton(amount, {
-                                onAdd(amount)
-                                snackbarMessage = "${amount}ml 기록 완료!"
+                                onAdd(amount, selectedType)
+                                snackbarMessage = "[$selectedType] ${amount}ml 기록 완료!"
                             }, Modifier.weight(1f))
                         }
                         Button(
@@ -339,10 +376,10 @@ fun HomeScreen(
     if (showCustomInput) {
         AlertDialog(
             onDismissRequest = { showCustomInput = false },
-            title = { Text("수치 입력") },
+            title = { Text("수치 입력 ($selectedType)") },
             text = {
                 Column {
-                    Text("소변량을 ml 단위로 입력하세요")
+                    Text("${selectedType} 양을 ml 단위로 입력하세요")
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = customAmountText,
@@ -357,8 +394,8 @@ fun HomeScreen(
                 TextButton(onClick = {
                     val v = customAmountText.toIntOrNull()
                     if (v != null && v > 0) {
-                        onAdd(v)
-                        snackbarMessage = "${v}ml 기록 완료!"
+                        onAdd(v, selectedType)
+                        snackbarMessage = "[$selectedType] ${v}ml 기록 완료!"
                         showCustomInput = false
                     }
                 }) { Text("기록") }
@@ -372,7 +409,7 @@ fun HomeScreen(
         AlertDialog(
             onDismissRequest = { recordToDelete = null },
             title = { Text("기록 삭제") },
-            text = { Text("${record.amount}ml 기록을 삭제할까요?") },
+            text = { Text("[${record.type}] ${record.amount}ml 기록을 삭제할까요?") },
             confirmButton = {
                 TextButton(onClick = { onDelete(record); recordToDelete = null }) {
                     Text("삭제", color = MaterialTheme.colorScheme.error)
@@ -452,8 +489,8 @@ fun HistoryScreen(records: List<UrineRecord>, onDelete: (UrineRecord) -> Unit) {
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            StatCard("총량", "${filteredRecords.sumOf { it.amount }}", "ml", Modifier.weight(1f))
-            StatCard("횟수", "${filteredRecords.size}", "회", Modifier.weight(1f))
+            StatCard("소변", "${filteredRecords.filter { it.type == "소변" }.sumOf { it.amount }}", "ml", Modifier.weight(1f))
+            StatCard("물", "${filteredRecords.filter { it.type == "물" }.sumOf { it.amount }}", "ml", Modifier.weight(1f))
         }
 
         HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
@@ -473,7 +510,7 @@ fun HistoryScreen(records: List<UrineRecord>, onDelete: (UrineRecord) -> Unit) {
                             ) {
                                 Text(dateFormat.format(day), style = MaterialTheme.typography.labelMedium)
                                 Text(
-                                    "합계 ${dayRecords.sumOf { it.amount }}ml",
+                                    "소변 ${dayRecords.filter { it.type == "소변" }.sumOf { it.amount }}ml · 물 ${dayRecords.filter { it.type == "물" }.sumOf { it.amount }}ml",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -522,7 +559,7 @@ fun HistoryScreen(records: List<UrineRecord>, onDelete: (UrineRecord) -> Unit) {
         AlertDialog(
             onDismissRequest = { recordToDelete = null },
             title = { Text("기록 삭제") },
-            text = { Text("${record.amount}ml 기록을 삭제할까요?") },
+            text = { Text("[${record.type}] ${record.amount}ml 기록을 삭제할까요?") },
             confirmButton = {
                 TextButton(onClick = { onDelete(record); recordToDelete = null }) {
                     Text("삭제", color = MaterialTheme.colorScheme.error)
@@ -641,6 +678,7 @@ fun SettingsScreen(
 @Composable
 fun RecordRow(record: UrineRecord, onLongClick: () -> Unit, modifier: Modifier = Modifier) {
     val timeFormat = SimpleDateFormat("a h:mm", Locale.KOREAN)
+    val typeColor = if (record.type == "물") Color(0xFF1565C0) else Color(0xFFF57F17)
     Column(modifier = modifier) {
         Row(
             modifier = Modifier
@@ -651,7 +689,21 @@ fun RecordRow(record: UrineRecord, onLongClick: () -> Unit, modifier: Modifier =
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(timeFormat.format(record.date), color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.bodyMedium)
-            Text("${record.amount} ml", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Surface(
+                    color = typeColor.copy(alpha = 0.15f),
+                    shape = MaterialTheme.shapes.extraSmall
+                ) {
+                    Text(
+                        record.type,
+                        color = typeColor,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+                Text("${record.amount} ml", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
+            }
         }
         HorizontalDivider()
     }

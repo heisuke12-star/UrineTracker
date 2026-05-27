@@ -1,4 +1,4 @@
-package com.example.urinetracker
+package com.heisuke12.urinetracker
 
 import org.junit.Test
 
