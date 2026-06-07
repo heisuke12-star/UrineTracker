@@ -1,6 +1,8 @@
 package com.heisuke12.urinetracker
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -30,11 +32,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import com.heisuke12.urinetracker.ui.theme.UrineTrackerTheme
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 // ── Models ────────────────────────────────────────────────────────────────────
 
@@ -128,6 +134,47 @@ fun groupByDay(records: List<UrineRecord>): List<Pair<Date, List<UrineRecord>>> 
         .entries
         .sortedByDescending { it.key }
         .map { it.key to it.value.sortedByDescending { r -> r.date } }
+}
+
+// ── Excel Export ──────────────────────────────────────────────────────────────
+
+fun exportToExcel(context: Context, records: List<UrineRecord>): Uri {
+    val df = SimpleDateFormat("yyyy-MM-dd", Locale.KOREAN)
+    val tf = SimpleDateFormat("HH:mm", Locale.KOREAN)
+    val file = File(context.cacheDir, "urine_records.xlsx")
+
+    ZipOutputStream(file.outputStream().buffered()).use { zip ->
+        fun entry(name: String, xml: String) {
+            zip.putNextEntry(ZipEntry(name))
+            zip.write(xml.toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
+        }
+        fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        fun str(ref: String, v: String, s: Int = 0) = """<c r="$ref" t="inlineStr" s="$s"><is><t>${esc(v)}</t></is></c>"""
+        fun num(ref: String, v: Int) = """<c r="$ref"><v>$v</v></c>"""
+
+        entry("[Content_Types].xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>""")
+
+        entry("_rels/.rels", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>""")
+
+        entry("xl/_rels/workbook.xml.rels", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>""")
+
+        entry("xl/workbook.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="소변 기록" sheetId="1" r:id="rId1"/></sheets></workbook>""")
+
+        entry("xl/styles.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0"/></cellXfs></styleSheet>""")
+
+        val sb = StringBuilder()
+        sb.append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols><col min="1" max="1" width="14" customWidth="1"/><col min="2" max="2" width="8" customWidth="1"/><col min="3" max="3" width="8" customWidth="1"/><col min="4" max="4" width="10" customWidth="1"/></cols><sheetData>""")
+        sb.append("""<row r="1">${str("A1","날짜",1)}${str("B1","시간",1)}${str("C1","종류",1)}${str("D1","양(ml)",1)}</row>""")
+        records.sortedBy { it.date }.forEachIndexed { i, r ->
+            val n = i + 2
+            sb.append("""<row r="$n">${str("A$n",df.format(r.date))}${str("B$n",tf.format(r.date))}${str("C$n",r.type)}${num("D$n",r.amount)}</row>""")
+        }
+        sb.append("</sheetData></worksheet>")
+        entry("xl/worksheets/sheet1.xml", sb.toString())
+    }
+
+    return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
 }
 
 // ── MainActivity ──────────────────────────────────────────────────────────────
@@ -425,6 +472,7 @@ fun HomeScreen(
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HistoryScreen(records: List<UrineRecord>, onDelete: (UrineRecord) -> Unit) {
+    val context = LocalContext.current
     val monthFormat = SimpleDateFormat("yyyy년 M월", Locale.KOREAN)
     val dateFormat = SimpleDateFormat("M월 d일 (E)", Locale.KOREAN)
 
@@ -451,7 +499,25 @@ fun HistoryScreen(records: List<UrineRecord>, onDelete: (UrineRecord) -> Unit) {
     val grouped = groupByDay(filteredRecords)
 
     Column(modifier = Modifier.fillMaxSize()) {
-        CenterAlignedTopAppBar(title = { Text("기록") })
+        CenterAlignedTopAppBar(
+            title = { Text("기록") },
+            actions = {
+                TextButton(
+                    onClick = {
+                        val uri = exportToExcel(context, filteredRecords)
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(Intent.createChooser(intent, "엑셀 파일 저장"))
+                    },
+                    enabled = filteredRecords.isNotEmpty()
+                ) {
+                    Text("Excel 출력")
+                }
+            }
+        )
 
         TabRow(selectedTabIndex = selectedMode) {
             Tab(selected = selectedMode == 0, onClick = { selectedMode = 0 }, text = { Text("월별") })
